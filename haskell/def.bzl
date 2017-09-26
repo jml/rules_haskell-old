@@ -6,11 +6,9 @@ In comments and docstrings, the first person refers to jml, aka Jonathan Lange.
 """
 
 # TODO:
-# - transitive dependencies
-# - depending on things in other packages
-# - hs_test rule
 # - change _hs_compile to take multiple srcs
 # - (maybe) change _hs_compile to create output directory
+# - hs_test rule
 # - understand rest of Stack-provided GHC options
 # - data dependencies (probably requires simulating cabal)
 # - set up toolchain / repository rules for GHC so we don't have to assume it's installed
@@ -82,9 +80,11 @@ def _hs_compile(toolchain, name, actions, src, deps, output_dir):
 
   import_directories = []
   dep_files = depset([])
+  hs_objects = depset([object_file])
   for dep in deps:
     import_directories.append('-i%s' % dep[ghc_output].import_directory)
     dep_files += dep[ghc_output].files
+    hs_objects += dep[ghc_output].hs_objects
 
   ghc_args = [
     '-c',  # So we just compile things, no linking
@@ -125,6 +125,7 @@ def _hs_compile(toolchain, name, actions, src, deps, output_dir):
     files = depset([object_file, interface_file]),
     hs_object = object_file,
     hs_interface = interface_file,
+    hs_objects = hs_objects,
     # XXX:Would really like to have a better answer than this.
     import_directory = output_dir,
   )
@@ -159,15 +160,14 @@ def _hs_binary_impl(ctx):
   lib_self = _hs_compile(
     toolchain, ctx.label.name, ctx.actions, src, ctx.attr.deps,
     _get_output_dir(ctx, src))
-  objects = [x[ghc_output].hs_object for x in ctx.attr.deps] + [lib_self.hs_object]
   # XXX: I guess we have to use ghc to link executables.
   ctx.actions.run(
-      inputs = objects + ctx.files.data,
+      inputs = lib_self.hs_objects + ctx.files.data,
       outputs = [ctx.outputs.executable],
       executable = toolchain.ghc_path,
       arguments = [
         "-o", ctx.outputs.executable.path,
-      ] + [obj.path for obj in objects],
+      ] + [obj.path for obj in lib_self.hs_objects],
       use_default_shell_env = True,
   )
 
