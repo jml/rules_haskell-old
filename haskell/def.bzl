@@ -6,7 +6,6 @@ In comments and docstrings, the first person refers to jml, aka Jonathan Lange.
 """
 
 # TODO:
-# - change _hs_compile to take multiple srcs
 # - (maybe) change _hs_compile to create output directory
 # - hs_test rule
 # - understand rest of Stack-provided GHC options
@@ -21,6 +20,7 @@ In comments and docstrings, the first person refers to jml, aka Jonathan Lange.
 # - tool for generating BUILD files from cabal files
 # - tool for generating BUILD files from hpack files
 # - generate skylark documentation
+# - some sort of equivalent of exposed-modules / other-modules?
 
 
 """Valid Haskell source files."""
@@ -43,12 +43,43 @@ def _haskell_toolchain(ctx):
   )
 
 def _dirname(path_str):
-  return path_str[:path_str.rfind('/')]
+  if '/' in path_str:
+    return path_str[:path_str.rfind('/')]
+  return ''
 
-def _get_output_dir(ctx, _input):
+def _get_output_dir(ctx):
   return '/'.join([ctx.bin_dir.path, _dirname(ctx.build_file_path)])
 
-def _hs_compile(toolchain, name, actions, src, deps, output_dir):
+def _path_segments(path):
+  return [s for s in path.split('/') if s not in ('.', '')]
+
+def _declare_output_file(actions, build_dir, src_dir, src_file, extension):
+  """Declare the output file of a GHC process.
+
+  :param actions: The ``ctx.actions`` object
+  :param build_dir: The directory BUILD is in.
+  :param src_dir: The root of the module hierarchy
+  :param src_file: File within 'src_dir' that's being compiled.
+      e.g. ``$src_dir/Module/Hierarchy/Name.hs``
+  :param extension: The extension of the new file, either ``'.o'`` or ``'.hi'``.
+  :return: A 'File' pointing at ``Module/Hierarchy/Name.(o|hi)``
+  """
+  src_segments = _path_segments(src_file.path)
+  module_root = _path_segments(build_dir) + _path_segments(src_dir)
+  if src_segments[:len(module_root)] != module_root:
+    fail("Expected source file, %s, to be underneath source directory, %s" % (src_file, src_dir))
+  module_segments = src_segments[len(module_root):]
+  if len(module_segments) == 0:
+    fail("No source file left after trimming source directory (src_file=%s, src_dir=%s)" % (src_file, src_dir))
+  basename = module_segments[-1]
+  extension_index = basename.rfind('.')
+  if extension_index == -1:
+    fail("Somehow got unexpected source filename, %s. Must be one of %s" % (basename, HASKELL_FILETYPE))
+  new_basename = basename[:extension_index] + extension
+  new_path = '/'.join(module_segments[:-1] + [new_basename])
+  return actions.declare_file(new_path)
+
+def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, main_file=None, src_dir=None):
   """Compile a single Haskell module.
 
   To be able to use this, a reverse dependency is going to have to either
@@ -69,67 +100,66 @@ def _hs_compile(toolchain, name, actions, src, deps, output_dir):
   Or maybe I have but I've forgotten the results.
 
   """
-  # TODO: I think we can easily change this to compile multiple files.
-  if src.extension not in HASKELL_FILETYPE:
-    # XXX: We probably want to allow srcs that aren't Haskell files (genrule
-    # results? *.o files?). For now, keeping it simple.
-    fail("Can only build Haskell libraries from source files: %s" % (src.path,))
-
-  object_file = actions.declare_file(_change_extension(src, 'o'))
-  interface_file = actions.declare_file(_change_extension(src, 'hi'))
+  object_files = []
+  interface_files = []
+  for src in srcs:
+    if src == main_file:
+      object_files.append(actions.declare_file("Main.o"))
+      interface_files.append(actions.declare_file("Main.hi"))
+    else:
+      object_files.append(_declare_output_file(actions, build_dir, src_dir, src, '.o'))
+      interface_files.append(_declare_output_file(actions, build_dir, src_dir, src, '.hi'))
+  output_files = object_files + interface_files
 
   import_directories = []
   dep_files = depset([])
-  hs_objects = depset([object_file])
+  transitive_hs_objects = depset(object_files)
   for dep in deps:
+    # XXX: Should we de-dupe import directories, or does some magic make that
+    # happen for us?
     import_directories.append('-i%s' % dep[ghc_output].import_directory)
     dep_files += dep[ghc_output].files
-    hs_objects += dep[ghc_output].hs_objects
+    transitive_hs_objects += dep[ghc_output].transitive_hs_objects
 
   ghc_args = [
     '-c',  # So we just compile things, no linking
     '-i',  # Empty the import directory list
     ] + import_directories + [
-    # Dodgy hack that jml doesn't understand to make the already-compiled
-    # dependencies visible to GHC (although *which* dependencies?).
-    #'-i%s' % ctx.configuration.bin_dir.path,  # <-- not entirely correct
-    '-o',  object_file.path,
-    '-ohi', interface_file.path,
-    src.path,
-    # XXX: stack also includes
-    # -ddump-hi
-    # -ddump-to-file
-    # -optP-include
-    # -optP.stack-work/.../cabal_macros.h
-    #
-    # - various output dir controls
-    # - various package db controls
-    #
-    # Also what about...
-    # - optimizations
-    # - warnings
-    # - concurrent builds (-j4)
-    # - -threaded (I guess only relevant for executables)
-  ]
+      '-odir', output_dir,
+      '-hidir', output_dir,
+    ] + [src.path for src in srcs]
+  # XXX: stack also includes
+  # -ddump-hi
+  # -ddump-to-file
+  # -optP-include
+  # -optP.stack-work/.../cabal_macros.h
+  #
+  # - various output dir controls
+  # - various package db controls
+  #
+  # Also what about...
+  # - optimizations
+  # - warnings
+  # - concurrent builds (-j4)
+  # - -threaded (I guess only relevant for executables)
   actions.run(
-    inputs = [src] + dep_files.to_list(),
-    outputs = [object_file, interface_file],
+    inputs = srcs + dep_files.to_list(),
+    outputs = output_files,
     executable = toolchain.ghc_path,
     arguments = ghc_args,
-    progress_message = ("Compiling Haskell module %s" % (src,)),
+    progress_message = ("Compiling Haskell modules %s" % (srcs,)),
     mnemonic = 'HsCompile',
     # TODO: Figure out how we can do without this.
     use_default_shell_env = True,
   )
   return ghc_output(
-    files = depset([object_file, interface_file]),
-    hs_object = object_file,
-    hs_interface = interface_file,
-    hs_objects = hs_objects,
+    files = depset(output_files),
+    hs_objects = depset(object_files),
+    hs_interfaces = depset(interface_files),
+    transitive_hs_objects = transitive_hs_objects,
     # XXX:Would really like to have a better answer than this.
     import_directory = output_dir,
   )
-
 
 def _hs_module_impl(ctx):
   """A single Haskell module.
@@ -144,43 +174,27 @@ def _hs_module_impl(ctx):
   See https://downloads.haskell.org/~ghc/latest/docs/html/users_guide/using.html#getting-started-compiling-programs
   """
   toolchain = _haskell_toolchain(ctx)
-  if len(ctx.files.srcs) > 1:
-    fail("We only support building modules from one source file: %s" % (ctx.files.srcs))
-  [src] = ctx.files.srcs
   return _hs_compile(
-    toolchain, ctx.label.name, ctx.actions, src, ctx.attr.deps,
-    _get_output_dir(ctx, src))
+    toolchain, ctx.label.name, ctx.actions, ctx.files.srcs, ctx.attr.deps,
+    _dirname(ctx.build_file_path), _get_output_dir(ctx), src_dir=ctx.attr.src_dir)
 
 def _hs_binary_impl(ctx):
   """A Haskell executable."""
   toolchain = _haskell_toolchain(ctx)
-  if len(ctx.files.srcs) > 1:
-    fail("We only support building binaries from one source file: %s" % (ctx.files.srcs))
-  [src] = ctx.files.srcs
   lib_self = _hs_compile(
-    toolchain, ctx.label.name, ctx.actions, src, ctx.attr.deps,
-    _get_output_dir(ctx, src))
+    toolchain, ctx.label.name, ctx.actions, ctx.files.srcs, ctx.attr.deps,
+    _dirname(ctx.build_file_path), _get_output_dir(ctx),
+    main_file=ctx.file.main_is, src_dir=ctx.attr.src_dir)
   # XXX: I guess we have to use ghc to link executables.
   ctx.actions.run(
-      inputs = lib_self.hs_objects + ctx.files.data,
+      inputs = lib_self.transitive_hs_objects + ctx.files.data,
       outputs = [ctx.outputs.executable],
       executable = toolchain.ghc_path,
       arguments = [
         "-o", ctx.outputs.executable.path,
-      ] + [obj.path for obj in lib_self.hs_objects],
+      ] + [obj.path for obj in lib_self.transitive_hs_objects],
       use_default_shell_env = True,
   )
-
-def _change_extension(file_object, new_extension):
-   """Return the basename of 'file_object' with a new extension.
-
-   e.g.
-
-       _change_extension(file_obj, 'o')
-
-   Will change the extension from '.c' or '.hs' to '.o'.
-   """
-   return file_object.basename[:-len(file_object.extension)] + new_extension
 
 _hs_attrs = {
     "srcs": attr.label_list(
@@ -192,6 +206,15 @@ _hs_attrs = {
     "data": attr.label_list(
         allow_files = True,
     ),
+    "src_dir": attr.string(
+        doc = 'The root of the module hierarchy',
+    ),
+}
+
+_hs_binary_attrs = {
+    "main_is": attr.label(
+      allow_single_file = HASKELL_FILETYPE,
+    ),
 }
 
 hs_library = rule(
@@ -200,7 +223,7 @@ hs_library = rule(
 )
 
 hs_binary = rule(
-    attrs = _hs_attrs,
+    attrs = dict(_hs_attrs.items() + _hs_binary_attrs.items()),
     executable = True,
     implementation = _hs_binary_impl,
 )

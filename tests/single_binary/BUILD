@@ -17,4 +17,5 @@ bazel_test(
 hs_binary(
     name = "hello_world",
     srcs = ["HelloWorld.hs"],
+    main_is = "HelloWorld.hs",
 )
