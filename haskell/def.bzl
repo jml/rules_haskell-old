@@ -5,13 +5,35 @@ These build rules are used for building Haskell projects with Bazel.
 In comments and docstrings, the first person refers to jml, aka Jonathan Lange.
 """
 
+# TODO:
+# - transitive dependencies
+# - BUILD file not at module root (e.g. BUILD, src/Foo/Bar.hs)
+# - depending on things in other packages
+# - hs_test rule
+# - change _hs_compile to take multiple srcs
+# - (maybe) change _hs_compile to create output directory
+# - understand rest of Stack-provided GHC options
+# - data dependencies (probably requires simulating cabal)
+# - set up toolchain / repository rules for GHC so we don't have to assume it's installed
+# - allow passing compiler options
+#   - profiling / debug builds
+#   - language flags, warnings, etc.
+#   - threaded
+#   - -j4 (i.e. concurrent builds)
+# - library with C dependencies (e.g. PCRE)
+# - tool for generating BUILD files from cabal files
+# - tool for generating BUILD files from hpack files
+# - generate skylark documentation
+
+
 """Valid Haskell source files."""
 HASKELL_FILETYPE = [
     "hs",
     "lhs",
 ]
 
-# XXX: I tried specifying 'fields' as per the docs but that failed.
+# TODO: Once Bazel 0.6.0 is released, specify allowed fields using 'fields'
+# parameter.
 ghc_output = provider()
 
 def _haskell_toolchain(ctx):
