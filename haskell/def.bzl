@@ -7,7 +7,6 @@ In comments and docstrings, the first person refers to jml, aka Jonathan Lange.
 
 # TODO:
 # - transitive dependencies
-# - BUILD file not at module root (e.g. BUILD, src/Foo/Bar.hs)
 # - depending on things in other packages
 # - hs_test rule
 # - change _hs_compile to take multiple srcs
