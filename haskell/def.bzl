@@ -78,7 +78,7 @@ def _declare_output_file(actions, build_dir, src_dir, src_file, extension):
   new_path = '/'.join(module_segments[:-1] + [new_basename])
   return actions.declare_file(new_path)
 
-def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, main_file=None, src_dir=None):
+def _hs_compile(toolchain, name, actions, srcs, deps, packages, build_dir, output_dir, main_file=None, src_dir=None):
   """Compile a single Haskell module.
 
   To be able to use this, a reverse dependency is going to have to either
@@ -122,19 +122,20 @@ def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, mai
     transitive_hs_objects += dep[ghc_output].transitive_hs_objects
     transitive_hs_interfaces += dep[ghc_output].transitive_hs_interfaces
 
+  # XXX: Hardcode 'base' as dependency for now. Probably want to make it an
+  # explicit dependency later.
+  packages = depset(['base'] + packages)
+
   #print('srcs = %s, deps = %s, dirs = %s --> %s' % (srcs, dep_files, import_directories, output_files))
 
-  ghc_args = [
+  ghc_args = ([
     '-c',  # So we just compile things, no linking
     '-i',  # Empty the import directory list
     '-hide-all-packages',  # Don't let the global package database infect our sacred purity
-    # TODO: Rather than hard-coding a dependency on the base package,
-    # allow packages to be specified as dependencies
-    '-package base',  # XXX: Infect our sacred purity
-    ] + import_directories + [
-      '-odir', output_dir,
-      '-hidir', output_dir,
-    ] + [src.path for src in srcs]
+  ] + ['-package %s' % package for package in packages ] + import_directories + [
+    '-odir', output_dir,
+    '-hidir', output_dir,
+  ] + [src.path for src in srcs])
   # XXX: stack also includes
   # -ddump-hi
   # -ddump-to-file
@@ -184,23 +185,24 @@ def _hs_module_impl(ctx):
   toolchain = _haskell_toolchain(ctx)
   return _hs_compile(
     toolchain, ctx.label.name, ctx.actions, ctx.files.srcs, ctx.attr.deps,
-    _dirname(ctx.build_file_path), _get_output_dir(ctx), src_dir=ctx.attr.src_dir)
+    ctx.attr.packages, _dirname(ctx.build_file_path), _get_output_dir(ctx),
+    src_dir=ctx.attr.src_dir)
 
 def _hs_binary_impl(ctx):
   """A Haskell executable."""
   toolchain = _haskell_toolchain(ctx)
   lib_self = _hs_compile(
     toolchain, ctx.label.name, ctx.actions, ctx.files.srcs, ctx.attr.deps,
-    _dirname(ctx.build_file_path), _get_output_dir(ctx),
+    ctx.attr.packages, _dirname(ctx.build_file_path), _get_output_dir(ctx),
     main_file=ctx.file.main_is, src_dir=ctx.attr.src_dir)
-  # XXX: I guess we have to use ghc to link executables.
+  # Use GHC to link executables.
   ctx.actions.run(
       inputs = lib_self.transitive_hs_objects + ctx.files.data,
       outputs = [ctx.outputs.executable],
       executable = toolchain.ghc_path,
       arguments = [
         "-o", ctx.outputs.executable.path,
-      ] + [obj.path for obj in lib_self.transitive_hs_objects],
+      ] + ['-package %s' % package for package in ctx.attr.packages] + [obj.path for obj in lib_self.transitive_hs_objects],
       use_default_shell_env = True,
   )
 
@@ -220,6 +222,12 @@ _hs_attrs = {
     "src_dir": attr.string(
         doc = 'The root of the module hierarchy',
     ),
+    # XXX: This is probably not a good idea. Rather, it would be better to
+    # only depend on modules compiled by Bazel. Nevertheless, it's a pragmatic
+    # way of getting us up and running quickly.
+    "packages": attr.string_list(
+        doc = "System packages to expose",
+     ),
 }
 
 _hs_binary_attrs = {

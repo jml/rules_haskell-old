@@ -4,5 +4,8 @@ hs_binary(
     name = "cabal-to-bazel",
     srcs = ["cmd/Main.hs"],
     src_dir = "cmd",
+    packages = [
+        "Cabal",
+    ],
 )
 
