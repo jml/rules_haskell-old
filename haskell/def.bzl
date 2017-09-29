@@ -7,20 +7,19 @@ In comments and docstrings, the first person refers to jml, aka Jonathan Lange.
 
 # TODO:
 # - (maybe) change _hs_compile to create output directory
-# - hs_test rule
-# - understand rest of Stack-provided GHC options
-# - data dependencies (probably requires simulating cabal)
-# - set up toolchain / repository rules for GHC so we don't have to assume it's installed
 # - allow passing compiler options
 #   - profiling / debug builds
 #   - language flags, warnings, etc.
 #   - threaded
 #   - -j4 (i.e. concurrent builds)
-# - library with C dependencies (e.g. PCRE)
-# - tool for generating BUILD files from cabal files
-# - tool for generating BUILD files from hpack files
-# - generate skylark documentation
 # - some sort of equivalent of exposed-modules / other-modules?
+# - consider whether to set 'main-is' by default when only one source file
+#
+# - data dependencies (probably requires simulating cabal) (#3)
+# - set up toolchain / repository rules for GHC so we don't have to assume it's installed (#4)
+# - library with C dependencies (e.g. PCRE)
+# - tool for generating BUILD files from cabal files (#5)
+# - generate skylark documentation (#7)
 
 
 """Valid Haskell source files."""
@@ -196,6 +195,9 @@ def _hs_binary_impl(ctx):
       use_default_shell_env = True,
   )
 
+def _hs_test_impl(ctx):
+  return _hs_binary_impl(ctx)
+
 _hs_attrs = {
     "srcs": attr.label_list(
         allow_files = HASKELL_FILETYPE,
@@ -226,4 +228,11 @@ hs_binary = rule(
     attrs = dict(_hs_attrs.items() + _hs_binary_attrs.items()),
     executable = True,
     implementation = _hs_binary_impl,
+)
+
+hs_test = rule(
+    attrs = dict(_hs_attrs.items() + _hs_binary_attrs.items()),
+    executable = True,
+    implementation = _hs_test_impl,
+    test = True,
 )
