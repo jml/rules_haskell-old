@@ -114,8 +114,7 @@ def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, mai
   dep_files = depset([])
   transitive_hs_objects = depset(object_files)
   for dep in deps:
-    # XXX: Should we de-dupe import directories, or does some magic make that
-    # happen for us?
+    # XXX: We get duplicate directories. Should probably de-dupe them.
     import_directories.append('-i%s' % dep[ghc_output].import_directory)
     dep_files += dep[ghc_output].files
     transitive_hs_objects += dep[ghc_output].transitive_hs_objects
@@ -156,7 +155,7 @@ def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, mai
     hs_objects = depset(object_files),
     hs_interfaces = depset(interface_files),
     transitive_hs_objects = transitive_hs_objects,
-    # XXX:Would really like to have a better answer than this.
+    # XXX: Would really like to have a better answer than this.
     import_directory = output_dir,
   )
 
