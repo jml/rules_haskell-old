@@ -111,18 +111,26 @@ def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, mai
   output_files = object_files + interface_files
 
   import_directories = []
-  dep_files = depset([])
-  transitive_hs_objects = depset(object_files)
+
+  immediate_hs_objects = depset([])
+  transitive_hs_objects = depset([])
+  transitive_hs_interfaces = depset([])
   for dep in deps:
-    # XXX: Should we de-dupe import directories, or does some magic make that
-    # happen for us?
+    # XXX: We get duplicate directories. Should probably de-dupe them.
     import_directories.append('-i%s' % dep[ghc_output].import_directory)
-    dep_files += dep[ghc_output].files
+    immediate_hs_objects += dep[ghc_output].hs_objects
     transitive_hs_objects += dep[ghc_output].transitive_hs_objects
+    transitive_hs_interfaces += dep[ghc_output].transitive_hs_interfaces
+
+  #print('srcs = %s, deps = %s, dirs = %s --> %s' % (srcs, dep_files, import_directories, output_files))
 
   ghc_args = [
     '-c',  # So we just compile things, no linking
     '-i',  # Empty the import directory list
+    '-hide-all-packages',  # Don't let the global package database infect our sacred purity
+    # TODO: Rather than hard-coding a dependency on the base package,
+    # allow packages to be specified as dependencies
+    '-package base',  # XXX: Infect our sacred purity
     ] + import_directories + [
       '-odir', output_dir,
       '-hidir', output_dir,
@@ -142,7 +150,7 @@ def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, mai
   # - concurrent builds (-j4)
   # - -threaded (I guess only relevant for executables)
   actions.run(
-    inputs = srcs + dep_files.to_list(),
+    inputs = srcs + (immediate_hs_objects + transitive_hs_interfaces).to_list(),
     outputs = output_files,
     executable = toolchain.ghc_path,
     arguments = ghc_args,
@@ -155,8 +163,9 @@ def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, mai
     files = depset(output_files),
     hs_objects = depset(object_files),
     hs_interfaces = depset(interface_files),
-    transitive_hs_objects = transitive_hs_objects,
-    # XXX:Would really like to have a better answer than this.
+    transitive_hs_objects = transitive_hs_objects + depset(object_files),
+    transitive_hs_interfaces = transitive_hs_interfaces + depset(interface_files),
+    # XXX: Would really like to have a better answer than this.
     import_directory = output_dir,
   )
 
