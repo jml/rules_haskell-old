@@ -127,6 +127,10 @@ def _hs_compile(toolchain, name, actions, srcs, deps, build_dir, output_dir, mai
   ghc_args = [
     '-c',  # So we just compile things, no linking
     '-i',  # Empty the import directory list
+    '-hide-all-packages',  # Don't let the global package database infect our sacred purity
+    # TODO: Rather than hard-coding a dependency on the base package,
+    # allow packages to be specified as dependencies
+    '-package base',  # XXX: Infect our sacred purity
     ] + import_directories + [
       '-odir', output_dir,
       '-hidir', output_dir,
