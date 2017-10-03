@@ -6,8 +6,11 @@ import System.IO (hPutStrLn, stderr)
 
 import Distribution.PackageDescription.Parse (parseGenericPackageDescription)
 
+
 convertCabalFile :: FilePath -> IO ()
-convertCabalFile cabalFile = print (parseGenericPackageDescription cabalFile)
+convertCabalFile cabalFile = do
+  contents <- readFile cabalFile
+  print (parseGenericPackageDescription contents)
 
 main :: IO ()
 main = do
