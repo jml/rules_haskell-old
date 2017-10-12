@@ -5,6 +5,11 @@ import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
 
 import Distribution.Compiler (CompilerInfo)
+import Distribution.PackageDescription
+  ( BuildInfo(..)
+  , GenericPackageDescription(..)
+  , allBuildInfo
+  )
 import Distribution.PackageDescription.Configuration (finalizePD)
 import Distribution.PackageDescription.Parse (ParseResult(..), parseGenericPackageDescription)
 import qualified Distribution.Simple.GHC as GHC
@@ -13,7 +18,6 @@ import Distribution.Simple.Program.Db (emptyProgramDb)
 import Distribution.System (buildPlatform)
 import qualified Distribution.Verbosity as Verbosity
 import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
-import Distribution.Types.GenericPackageDescription (GenericPackageDescription(..))
 
 
 -- Questions
@@ -28,6 +32,14 @@ import Distribution.Types.GenericPackageDescription (GenericPackageDescription(.
 -- Looks like Cabal turns a GenericPackageDescription into a specific PackageDescription
 -- We need to do something like that, but for all possible flags (?)
 
+
+data BazelRule = BazelRule
+
+printBazelRule :: BazelRule -> String
+printBazelRule _ = "hahahaha\n"
+
+buildInfoToBazel :: BuildInfo -> [BazelRule]
+buildInfoToBazel _ = [BazelRule]
 
 loadCompilerInfo :: IO CompilerInfo
 loadCompilerInfo = do
@@ -58,8 +70,7 @@ convertCabalFile cabalFile = do
             hPutStrLn stderr $ "Missing dependencies: " ++ show missingDeps
             exitFailure
           Right (packageDescription, flagAssignment) -> do
-            print packageDescription
-            print flagAssignment
+            print (map printBazelRule (concat (map buildInfoToBazel (allBuildInfo packageDescription))))
     bad -> do
       hPutStrLn stderr $ "Could not parse file: " ++ show bad
       exitFailure
