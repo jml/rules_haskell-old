@@ -8,6 +8,8 @@ import Distribution.Compiler (CompilerInfo)
 import Distribution.PackageDescription
   ( BuildInfo(..)
   , GenericPackageDescription(..)
+  , Library(..)
+  , PackageDescription(..)
   , allBuildInfo
   )
 import Distribution.PackageDescription.Configuration (finalizePD)
@@ -18,7 +20,9 @@ import Distribution.Simple.Program.Db (emptyProgramDb)
 import Distribution.System (buildPlatform)
 import qualified Distribution.Verbosity as Verbosity
 import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
-
+import Distribution.Types.PackageId (PackageIdentifier(..))
+import Distribution.Types.PackageName (PackageName)
+import Distribution.Types.UnqualComponentName (UnqualComponentName(..), packageNameToUnqualComponentName)
 
 -- Questions
 --
@@ -32,14 +36,30 @@ import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
 -- Looks like Cabal turns a GenericPackageDescription into a specific PackageDescription
 -- We need to do something like that, but for all possible flags (?)
 
+-- TODO: Try out ppPackageDescription
 
 data BazelRule = BazelRule
 
 printBazelRule :: BazelRule -> String
 printBazelRule _ = "hahahaha\n"
 
-buildInfoToBazel :: BuildInfo -> [BazelRule]
-buildInfoToBazel _ = [BazelRule]
+packageDescriptionToBazel :: PackageDescription -> [BazelRule]
+packageDescriptionToBazel packageDescription =
+  case library packageDescription of
+    Nothing -> []
+    Just lib ->
+      let name = getLibraryName (pkgName . package $ packageDescription) lib
+      in makeBazelRules name (libBuildInfo lib)
+
+-- | Get the name of the library of this PackageDescription.
+getLibraryName :: PackageName -> Library -> UnqualComponentName
+getLibraryName packageName lib =
+  case libName lib of
+    Nothing -> packageNameToUnqualComponentName packageName
+    Just name -> name
+
+makeBazelRules :: UnqualComponentName -> BuildInfo -> [BazelRule]
+makeBazelRules _ _ = [BazelRule]
 
 loadCompilerInfo :: IO CompilerInfo
 loadCompilerInfo = do
@@ -70,7 +90,7 @@ convertCabalFile cabalFile = do
             hPutStrLn stderr $ "Missing dependencies: " ++ show missingDeps
             exitFailure
           Right (packageDescription, flagAssignment) -> do
-            print (map printBazelRule (concat (map buildInfoToBazel (allBuildInfo packageDescription))))
+            print (map printBazelRule (packageDescriptionToBazel packageDescription))
     bad -> do
       hPutStrLn stderr $ "Could not parse file: " ++ show bad
       exitFailure
