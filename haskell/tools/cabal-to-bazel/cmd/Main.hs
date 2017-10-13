@@ -78,7 +78,31 @@ data BazelRule
   deriving (Show)
 
 printBazelRule :: BazelRule -> String
-printBazelRule = show
+printBazelRule (HsLibrary name attrs) =
+  printRule "hs_library" $ printName name ++ printAttrs attrs
+printBazelRule (HsBinary name attrs mainIs) =
+  printRule "hs_binary" $ printName name ++ printAttrs attrs ++ printMainIs mainIs
+printBazelRule (HsTest name attrs mainIs) =
+  printRule "hs_test" $ printName name ++ printAttrs attrs ++ printMainIs mainIs
+
+printRule :: String -> [String] -> String
+printRule kind elems = unlines $ [ kind ++ "(" ] ++ elems ++ [ ")" ]
+
+printName :: TargetName -> [String]
+printName name = ["    name = " ++ show name ++ ","]
+
+printAttrs :: HaskellAttributes -> [String]
+printAttrs attrs =
+  [ "    srcs = " ++ show (srcs attrs) ++ ","
+  , "    deps = " ++ show (deps attrs) ++ ","
+  , "    data = " ++ show (dataDeps attrs) ++ ","
+  , "    packages = " ++ show (packages attrs) ++ ","
+  , "    src_dir = " ++ show (srcDir attrs) ++ ","
+  ]
+
+printMainIs :: FilePath -> [String]
+printMainIs mainIs = ["    main_is = " ++ show mainIs ++ "," ]
+
 
 packageDescriptionToBazel :: PackageDescription -> [BazelRule]
 packageDescriptionToBazel packageDescription =
@@ -129,7 +153,7 @@ convertCabalFile cabalFile = do
             hPutStrLn stderr $ "Missing dependencies: " ++ show missingDeps
             exitFailure
           Right (packageDescription, flagAssignment) -> do
-            print (map printBazelRule (packageDescriptionToBazel packageDescription))
+            mapM_ putStrLn (map printBazelRule (packageDescriptionToBazel packageDescription))
     bad -> do
       hPutStrLn stderr $ "Could not parse file: " ++ show bad
       exitFailure
