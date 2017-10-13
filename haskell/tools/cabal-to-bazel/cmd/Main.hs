@@ -21,8 +21,12 @@ import Distribution.System (buildPlatform)
 import qualified Distribution.Verbosity as Verbosity
 import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
 import Distribution.Types.PackageId (PackageIdentifier(..))
-import Distribution.Types.PackageName (PackageName)
-import Distribution.Types.UnqualComponentName (UnqualComponentName(..), packageNameToUnqualComponentName)
+import Distribution.Types.PackageName (PackageName, unPackageName)
+import Distribution.Types.UnqualComponentName
+  ( UnqualComponentName(..)
+  , packageNameToUnqualComponentName
+  , unUnqualComponentName
+  )
 
 -- Questions
 --
@@ -38,10 +42,43 @@ import Distribution.Types.UnqualComponentName (UnqualComponentName(..), packageN
 
 -- TODO: Try out ppPackageDescription
 
-data BazelRule = BazelRule
+-- | A Bazel label.
+--
+-- See https://docs.bazel.build/versions/master/build-ref.html#labels
+type Label = String
+
+-- | A set of Bazel labels.
+type Labels = [Label]
+
+-- | The name of a target within a package.
+--
+-- See https://docs.bazel.build/versions/master/build-ref.html#name
+type TargetName = String
+
+-- | Attributes that are common across Haskell Bazel rules.
+data HaskellAttributes
+  = HaskellAttributes
+  { -- | Sources for this Bazel target.
+    srcs :: !Labels
+    -- | Dependencies for this Bazel target.
+  , deps :: !Labels
+    -- | Data dependencies for the Bazel target.
+  , dataDeps :: !Labels
+    -- | The root of the module hierarchy.
+  , srcDir :: FilePath
+    -- | GHC packages that we depend on.
+  , packages :: [PackageName]
+  } deriving (Show)
+
+-- | A single Bazel rule for building Haskell.
+data BazelRule
+  = HsLibrary TargetName HaskellAttributes
+  | HsBinary TargetName HaskellAttributes FilePath
+  | HsTest TargetName HaskellAttributes FilePath
+  deriving (Show)
 
 printBazelRule :: BazelRule -> String
-printBazelRule _ = "hahahaha\n"
+printBazelRule = show
 
 packageDescriptionToBazel :: PackageDescription -> [BazelRule]
 packageDescriptionToBazel packageDescription =
@@ -59,7 +96,9 @@ getLibraryName packageName lib =
     Just name -> name
 
 makeBazelRules :: UnqualComponentName -> BuildInfo -> [BazelRule]
-makeBazelRules _ _ = [BazelRule]
+makeBazelRules name _ = [HsLibrary (toTargetName name) (HaskellAttributes [] [] [] [] [])]
+  where
+    toTargetName = unUnqualComponentName
 
 loadCompilerInfo :: IO CompilerInfo
 loadCompilerInfo = do
