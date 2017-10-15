@@ -22,8 +22,7 @@ import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
 import Distribution.Types.PackageId (PackageIdentifier(..))
 import Distribution.Types.PackageName (PackageName)
 import Distribution.Types.UnqualComponentName
-  ( UnqualComponentName
-  , packageNameToUnqualComponentName
+  ( packageNameToUnqualComponentName
   , unUnqualComponentName
   )
 
@@ -122,13 +121,12 @@ packageDescriptionToBazel packageDescription =
       let name = getLibraryName (pkgName . package $ packageDescription) lib
       in pure $ BazelBuildFile $ makeBazelRules name (libBuildInfo lib)
 
--- | Get the name of the library of this PackageDescription.
-getLibraryName :: PackageName -> Library -> UnqualComponentName
-getLibraryName packageName lib = fromMaybe (packageNameToUnqualComponentName packageName) (libName lib)
-
-makeBazelRules :: UnqualComponentName -> BuildInfo -> [BazelRule]
-makeBazelRules name _ = [HsLibrary (toTargetName name) (HaskellAttributes [] [] [] [] [])]
   where
+    -- | Get the name of the library of this PackageDescription.
+    getLibraryName packageName lib = fromMaybe (packageNameToUnqualComponentName packageName) (libName lib)
+
+    makeBazelRules name _ = [HsLibrary (toTargetName name) (HaskellAttributes [] [] [] [] [])]
+
     toTargetName = unUnqualComponentName
 
 loadCompilerInfo :: IO CompilerInfo
