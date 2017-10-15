@@ -1,0 +1,19 @@
+name: cabal-to-bazel
+version: 0.1.0
+synopsis: Command-line tool to convert Cabal projects to Bazel BUILD rules
+description: |
+  Honestly, who can say?
+maintainer: Jonathan M. Lange <jml@mumak.net>
+license: Apache
+
+ghc-options: -Wall
+
+dependencies:
+  - base
+  - Cabal
+  - ghc
+
+executables:
+  cabal-to-bazel:
+    main: Main.hs
+    source-dirs: cmd

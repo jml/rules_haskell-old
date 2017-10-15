@@ -1,1 +1,3 @@
 /bazel-*
+.stack-work
+.cabal-sandbox
