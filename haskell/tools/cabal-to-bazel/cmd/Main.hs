@@ -130,8 +130,11 @@ makeBazelRules name _ = [HsLibrary (toTargetName name) (HaskellAttributes [] [] 
 
 loadCompilerInfo :: IO CompilerInfo
 loadCompilerInfo = do
-  (compiler, _platform, _progDB) <- GHC.configure Verbosity.silent (Just "/usr/local/bin/ghc") (Just "/usr/local/bin/ghc-pkg") emptyProgramDb
+  (compiler, _platform, _progDB) <- GHC.configure Verbosity.silent (Just hardcodedGhc) (Just hardcodedGhcPkg) emptyProgramDb
   pure (compilerInfo compiler)
+  where
+    hardcodedGhc = "/usr/local/bin/ghc"
+    hardcodedGhcPkg = "/usr/local/bin/ghc-pkg"
 
 convertCabalFile :: FilePath -> IO ()
 convertCabalFile cabalFile = do
