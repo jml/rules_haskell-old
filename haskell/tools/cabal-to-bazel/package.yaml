@@ -12,6 +12,7 @@ dependencies:
   - base
   - Cabal
   - ghc
+  - ghc-paths
 
 executables:
   cabal-to-bazel:

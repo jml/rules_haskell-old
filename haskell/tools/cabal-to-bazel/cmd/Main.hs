@@ -27,6 +27,9 @@ import Distribution.Types.UnqualComponentName
   , unUnqualComponentName
   )
 
+import qualified GHC
+import qualified GHC.Paths
+
 -- Questions
 --
 -- - what is a manual flag?
@@ -111,13 +114,13 @@ emptyBuildFile = BazelBuildFile []
 printBuildFile :: BazelBuildFile -> String
 printBuildFile (BazelBuildFile rules) = unlines (map printBazelRule rules)
 
-packageDescriptionToBazel :: PackageDescription -> BazelBuildFile
+packageDescriptionToBazel :: GHC.GhcMonad m => PackageDescription -> m BazelBuildFile
 packageDescriptionToBazel packageDescription =
   case library packageDescription of
-    Nothing -> emptyBuildFile
+    Nothing -> pure emptyBuildFile
     Just lib ->
       let name = getLibraryName (pkgName . package $ packageDescription) lib
-      in BazelBuildFile $ makeBazelRules name (libBuildInfo lib)
+      in pure $ BazelBuildFile $ makeBazelRules name (libBuildInfo lib)
 
 -- | Get the name of the library of this PackageDescription.
 getLibraryName :: PackageName -> Library -> UnqualComponentName
@@ -159,8 +162,9 @@ convertCabalFile cabalFile = do
           Left missingDeps -> do
             hPutStrLn stderr $ "Missing dependencies: " ++ show missingDeps
             exitFailure
-          Right (packageDescription, _flagAssignment) ->
-            putStr (printBuildFile (packageDescriptionToBazel packageDescription))
+          Right (packageDescription, _flagAssignment) -> do
+            buildFile <- GHC.runGhc (Just GHC.Paths.libdir) (packageDescriptionToBazel packageDescription)
+            putStr (printBuildFile buildFile)
     bad -> do
       hPutStrLn stderr $ "Could not parse file: " ++ show bad
       exitFailure

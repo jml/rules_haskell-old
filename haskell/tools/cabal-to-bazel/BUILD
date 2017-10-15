@@ -6,6 +6,8 @@ hs_binary(
     src_dir = "cmd",
     packages = [
         "Cabal",
+        "ghc",
+        "ghc-paths",
     ],
 )
 

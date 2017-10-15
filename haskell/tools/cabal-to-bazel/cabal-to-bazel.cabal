@@ -1,4 +1,4 @@
--- This file has been generated from package.yaml by hpack version 0.14.1.
+-- This file has been generated from package.yaml by hpack version 0.17.1.
 --
 -- see: https://github.com/sol/hpack
 
@@ -20,4 +20,5 @@ executable cabal-to-bazel
       base
     , Cabal
     , ghc
+    , ghc-paths
   default-language: Haskell2010
