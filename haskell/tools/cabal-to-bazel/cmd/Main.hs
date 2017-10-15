@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Data.Maybe (fromMaybe)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.IO (hPutStrLn, stderr)
@@ -7,10 +8,8 @@ import System.IO (hPutStrLn, stderr)
 import Distribution.Compiler (CompilerInfo)
 import Distribution.PackageDescription
   ( BuildInfo(..)
-  , GenericPackageDescription(..)
   , Library(..)
   , PackageDescription(..)
-  , allBuildInfo
   )
 import Distribution.PackageDescription.Configuration (finalizePD)
 import Distribution.PackageDescription.Parse (ParseResult(..), parseGenericPackageDescription)
@@ -21,9 +20,9 @@ import Distribution.System (buildPlatform)
 import qualified Distribution.Verbosity as Verbosity
 import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
 import Distribution.Types.PackageId (PackageIdentifier(..))
-import Distribution.Types.PackageName (PackageName, unPackageName)
+import Distribution.Types.PackageName (PackageName)
 import Distribution.Types.UnqualComponentName
-  ( UnqualComponentName(..)
+  ( UnqualComponentName
   , packageNameToUnqualComponentName
   , unUnqualComponentName
   )
@@ -114,10 +113,7 @@ packageDescriptionToBazel packageDescription =
 
 -- | Get the name of the library of this PackageDescription.
 getLibraryName :: PackageName -> Library -> UnqualComponentName
-getLibraryName packageName lib =
-  case libName lib of
-    Nothing -> packageNameToUnqualComponentName packageName
-    Just name -> name
+getLibraryName packageName lib = fromMaybe (packageNameToUnqualComponentName packageName) (libName lib)
 
 makeBazelRules :: UnqualComponentName -> BuildInfo -> [BazelRule]
 makeBazelRules name _ = [HsLibrary (toTargetName name) (HaskellAttributes [] [] [] [] [])]
@@ -126,7 +122,7 @@ makeBazelRules name _ = [HsLibrary (toTargetName name) (HaskellAttributes [] [] 
 
 loadCompilerInfo :: IO CompilerInfo
 loadCompilerInfo = do
-  (compiler, platform, progDB) <- GHC.configure Verbosity.silent (Just "/usr/local/bin/ghc") (Just "/usr/local/bin/ghc-pkg") emptyProgramDb
+  (compiler, _platform, _progDB) <- GHC.configure Verbosity.silent (Just "/usr/local/bin/ghc") (Just "/usr/local/bin/ghc-pkg") emptyProgramDb
   pure (compilerInfo compiler)
 
 convertCabalFile :: FilePath -> IO ()
@@ -147,13 +143,13 @@ convertCabalFile cabalFile = do
         -- Do we have any constraints on dependencies? I don't know why we might want these.
         depConstraints = []
       in do
-        compilerInfo <- loadCompilerInfo
-        case finalizePD flagAssignment componentRequestedSpec depIndex platform compilerInfo depConstraints desc of
+        compilerInfo' <- loadCompilerInfo
+        case finalizePD flagAssignment componentRequestedSpec depIndex platform compilerInfo' depConstraints desc of
           Left missingDeps -> do
             hPutStrLn stderr $ "Missing dependencies: " ++ show missingDeps
             exitFailure
-          Right (packageDescription, flagAssignment) -> do
-            mapM_ putStrLn (map printBazelRule (packageDescriptionToBazel packageDescription))
+          Right (packageDescription, _flagAssignment) ->
+            mapM_ (putStrLn . printBazelRule) (packageDescriptionToBazel packageDescription)
     bad -> do
       hPutStrLn stderr $ "Could not parse file: " ++ show bad
       exitFailure
