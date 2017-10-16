@@ -19,6 +19,8 @@ executable cabal-to-bazel
   build-depends:
       base
     , Cabal
+    , directory
+    , filepath
     , ghc
     , ghc-paths
   default-language: Haskell2010

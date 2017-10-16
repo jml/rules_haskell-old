@@ -11,6 +11,8 @@ ghc-options: -Wall
 dependencies:
   - base
   - Cabal
+  - directory
+  - filepath
   - ghc
   - ghc-paths
 

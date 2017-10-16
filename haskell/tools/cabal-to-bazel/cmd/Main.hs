@@ -1,30 +1,30 @@
 module Main (main) where
 
-import Data.Maybe (fromMaybe)
+import Data.List (intercalate)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
+import System.Directory (makeAbsolute)
+import System.FilePath ((</>), normalise, takeDirectory)
 import System.IO (hPutStrLn, stderr)
 
 import Distribution.Compiler (CompilerInfo)
+import qualified Distribution.ModuleName as ModuleName
 import Distribution.PackageDescription
   ( BuildInfo(..)
+  , GenericPackageDescription(..)
   , Library(..)
   , PackageDescription(..)
   )
 import Distribution.PackageDescription.Configuration (finalizePD)
 import Distribution.PackageDescription.Parse (ParseResult(..), parseGenericPackageDescription)
-import qualified Distribution.Simple.GHC as GHC
+import qualified Distribution.Simple.GHC as GHC -- XXX: Import with different name
 import Distribution.Simple.Compiler (compilerInfo)
 import Distribution.Simple.Program.Db (emptyProgramDb)
 import Distribution.System (buildPlatform)
 import qualified Distribution.Verbosity as Verbosity
 import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
-import Distribution.Types.PackageId (PackageIdentifier(..))
+import Distribution.Types.Dependency (Dependency)
 import Distribution.Types.PackageName (PackageName)
-import Distribution.Types.UnqualComponentName
-  ( packageNameToUnqualComponentName
-  , unUnqualComponentName
-  )
 
 import qualified GHC
 import qualified GHC.Paths
@@ -113,56 +113,69 @@ emptyBuildFile = BazelBuildFile []
 printBuildFile :: BazelBuildFile -> String
 printBuildFile (BazelBuildFile rules) = unlines (map printBazelRule rules)
 
-packageDescriptionToBazel :: GHC.GhcMonad m => PackageDescription -> m BazelBuildFile
-packageDescriptionToBazel packageDescription =
-  case library packageDescription of
+packageDescriptionToBazel :: GHC.GhcMonad m => FilePath -> PackageDescription -> m BazelBuildFile
+packageDescriptionToBazel cabalFile pkgDesc =
+  case library pkgDesc of
     Nothing -> pure emptyBuildFile
-    Just lib ->
-      let name = getLibraryName (pkgName . package $ packageDescription) lib
-      in pure $ BazelBuildFile $ makeBazelRules name (libBuildInfo lib)
+    Just lib -> do
+      let exposedMods = map (GHC.TargetModule . GHC.mkModuleName . intercalate "." . ModuleName.components) (exposedModules lib)
+      let targets = map makeTarget exposedMods
+      flags <- GHC.getSessionDynFlags
+      let srcDirs = map toAbsPath $ hsSourceDirs . libBuildInfo $ lib
+      _ <- GHC.setSessionDynFlags (flags { GHC.importPaths = srcDirs })
+      -- TODO: Current importPaths is `["."]`, which is presumably a default.
+      -- We want it to be the list of source directories provided by the BuildInfo
+      -- for the library, made absolute, calculated relative to the location of the
+      -- Cabal file.
+      GHC.setTargets targets
+      depGraph <- GHC.depanal [] False
+      pure $ BazelBuildFile [ HsLibrary (GHC.moduleNameString . GHC.ms_mod_name $ modSmry) (HaskellAttributes [] [] [] [] [])
+                            | modSmry <- depGraph
+                            ]
 
   where
-    -- | Get the name of the library of this PackageDescription.
-    getLibraryName packageName lib = fromMaybe (packageNameToUnqualComponentName packageName) (libName lib)
-
-    makeBazelRules name _ = [HsLibrary (toTargetName name) (HaskellAttributes [] [] [] [] [])]
-
-    toTargetName = unUnqualComponentName
+    toAbsPath relDir = normalise $ cabalDir </> relDir
+    cabalDir = takeDirectory cabalFile
+    makeTarget moduleName = GHC.Target { GHC.targetId = moduleName , GHC.targetAllowObjCode = False , GHC.targetContents = Nothing }
 
 loadCompilerInfo :: IO CompilerInfo
 loadCompilerInfo = do
-  (compiler, _platform, _progDB) <- GHC.configure Verbosity.silent (Just hardcodedGhc) (Just hardcodedGhcPkg) emptyProgramDb
+  (compiler, _platform, _progDB) <- GHC.configure Verbosity.silent (Just GHC.Paths.ghc) (Just GHC.Paths.ghc_pkg) emptyProgramDb
   pure (compilerInfo compiler)
+
+
+flattenCabalFile :: GenericPackageDescription -> IO (Either [Dependency] PackageDescription)
+flattenCabalFile desc = do
+  compilerInfo' <- loadCompilerInfo
+  pure $ fst <$> finalizePD flagAssignment componentRequestedSpec depIndex platform compilerInfo' depConstraints desc
   where
-    hardcodedGhc = "/usr/local/bin/ghc"
-    hardcodedGhcPkg = "/usr/local/bin/ghc-pkg"
+    -- No one has explicitly specified flags. In final version, we want to
+    -- have a bazel file that somehow supports flags.
+    flagAssignment = []
+    -- We want to generate everything, so not OneComponentRequestedSpec.
+    -- We don't yet have support for running benchmarks.
+    componentRequestedSpec = ComponentRequestedSpec { testsRequested = True, benchmarksRequested = False }
+    -- Unknown whether a dependency is satisfiable.
+    depIndex = const True
+    platform = buildPlatform  -- XXX: Apparently should be using LocalBuildInfo.hostPlatform instead.
+    -- Do we have any constraints on dependencies? I don't know why we might want these.
+    depConstraints = []
+
 
 convertCabalFile :: FilePath -> IO ()
 convertCabalFile cabalFile = do
   contents <- readFile cabalFile
   case parseGenericPackageDescription contents of
-    ParseOk [] desc ->
-      let
-        -- No one has explicitly specified flags. In final version, we want to
-        -- have a bazel file that somehow supports flags.
-        flagAssignment = []
-        -- We want to generate everything, so not OneComponentRequestedSpec.
-        -- We don't yet have support for running benchmarks.
-        componentRequestedSpec = ComponentRequestedSpec { testsRequested = True, benchmarksRequested = False }
-        -- Unknown whether a dependency is satisfiable.
-        depIndex = const True
-        platform = buildPlatform  -- XXX: Apparently should be using LocalBuildInfo.hostPlatform instead.
-        -- Do we have any constraints on dependencies? I don't know why we might want these.
-        depConstraints = []
-      in do
-        compilerInfo' <- loadCompilerInfo
-        case finalizePD flagAssignment componentRequestedSpec depIndex platform compilerInfo' depConstraints desc of
-          Left missingDeps -> do
-            hPutStrLn stderr $ "Missing dependencies: " ++ show missingDeps
-            exitFailure
-          Right (packageDescription, _flagAssignment) -> do
-            buildFile <- GHC.runGhc (Just GHC.Paths.libdir) (packageDescriptionToBazel packageDescription)
-            putStr (printBuildFile buildFile)
+    ParseOk [] genericDesc -> do
+      desc <- flattenCabalFile genericDesc
+      case desc of
+        Left missingDeps -> do
+          hPutStrLn stderr $ "Missing dependencies: " ++ show missingDeps
+          exitFailure
+        Right pkgDesc -> do
+          absCabalFile <- makeAbsolute cabalFile
+          buildFile <- GHC.runGhc (Just GHC.Paths.libdir) (packageDescriptionToBazel absCabalFile pkgDesc)
+          putStr (printBuildFile buildFile)
     bad -> do
       hPutStrLn stderr $ "Could not parse file: " ++ show bad
       exitFailure
