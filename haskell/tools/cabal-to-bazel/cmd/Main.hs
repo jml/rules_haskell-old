@@ -4,7 +4,7 @@ import Data.List (intercalate)
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.Directory (makeAbsolute)
-import System.FilePath ((</>), normalise, takeDirectory)
+import System.FilePath ((</>), normalise, makeRelative, takeDirectory)
 import System.IO (hPutStrLn, stderr)
 
 import Distribution.Compiler (CompilerInfo)
@@ -17,7 +17,7 @@ import Distribution.PackageDescription
   )
 import Distribution.PackageDescription.Configuration (finalizePD)
 import Distribution.PackageDescription.Parse (ParseResult(..), parseGenericPackageDescription)
-import qualified Distribution.Simple.GHC as GHC -- XXX: Import with different name
+import qualified Distribution.Simple.GHC as CabalGHC
 import Distribution.Simple.Compiler (compilerInfo)
 import Distribution.Simple.Program.Db (emptyProgramDb)
 import Distribution.System (buildPlatform)
@@ -26,8 +26,10 @@ import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
 import Distribution.Types.Dependency (Dependency)
 import Distribution.Types.PackageName (PackageName)
 
+import qualified Digraph
 import qualified GHC
 import qualified GHC.Paths
+import HscTypes (msHsFilePath)
 
 -- Questions
 --
@@ -113,34 +115,61 @@ emptyBuildFile = BazelBuildFile []
 printBuildFile :: BazelBuildFile -> String
 printBuildFile (BazelBuildFile rules) = unlines (map printBazelRule rules)
 
+getSrcDir :: FilePath -> Library -> FilePath
+getSrcDir cabalDir lib =
+  case map toAbsPath $ hsSourceDirs . libBuildInfo $ lib of
+    [srcDir'] -> srcDir'
+    [] -> cabalDir
+    _ -> error "Do not support multiple source directories"
+  where
+    toAbsPath relDir = normalise $ cabalDir </> relDir
+
+loadDepGraph :: GHC.GhcMonad m => Library -> m GHC.ModuleGraph
+loadDepGraph lib = do
+  let exposedMods = map (GHC.TargetModule . GHC.mkModuleName . intercalate "." . ModuleName.components) (exposedModules lib)
+  let targets = map makeTarget exposedMods
+  GHC.setTargets targets
+  GHC.depanal [] False -- XXX: MkDepend allows duplicate roots. Do we want that? What does it even mean?
+  where
+    makeTarget moduleName = GHC.Target { GHC.targetId = moduleName , GHC.targetAllowObjCode = False , GHC.targetContents = Nothing }
+
+
+ruleForModule :: FilePath -> FilePath -> Digraph.SCC GHC.ModSummary -> BazelRule
+ruleForModule _ _ (Digraph.CyclicSCC _nodes) = error "cyclic nodes"
+ruleForModule cabalDir srcDir' (Digraph.AcyclicSCC node) =
+  HsLibrary (GHC.moduleNameString . GHC.ms_mod_name $ node) attrs
+  where
+    attrs = HaskellAttributes
+            { srcs = [makeRelative cabalDir (msHsFilePath node)]
+            , deps = []
+            , dataDeps = []
+            , srcDir = makeRelative cabalDir srcDir'
+            , packages = []
+            }
+
+-- TODO: Visibility
+
+-- TODO: Keep a map of modules to rules so we can do dependencies.
+
 packageDescriptionToBazel :: GHC.GhcMonad m => FilePath -> PackageDescription -> m BazelBuildFile
 packageDescriptionToBazel cabalFile pkgDesc =
   case library pkgDesc of
     Nothing -> pure emptyBuildFile
     Just lib -> do
-      let exposedMods = map (GHC.TargetModule . GHC.mkModuleName . intercalate "." . ModuleName.components) (exposedModules lib)
-      let targets = map makeTarget exposedMods
       flags <- GHC.getSessionDynFlags
-      let srcDirs = map toAbsPath $ hsSourceDirs . libBuildInfo $ lib
-      _ <- GHC.setSessionDynFlags (flags { GHC.importPaths = srcDirs })
-      -- TODO: Current importPaths is `["."]`, which is presumably a default.
-      -- We want it to be the list of source directories provided by the BuildInfo
-      -- for the library, made absolute, calculated relative to the location of the
-      -- Cabal file.
-      GHC.setTargets targets
-      depGraph <- GHC.depanal [] False
-      pure $ BazelBuildFile [ HsLibrary (GHC.moduleNameString . GHC.ms_mod_name $ modSmry) (HaskellAttributes [] [] [] [] [])
-                            | modSmry <- depGraph
-                            ]
-
+      let srcDir' = getSrcDir cabalDir lib
+      _ <- GHC.setSessionDynFlags (flags { GHC.importPaths = [srcDir']
+                                         , GHC.ghcMode = GHC.MkDepend
+                                         })
+      depGraph <- loadDepGraph lib
+      let sorted = GHC.topSortModuleGraph False depGraph Nothing
+      pure $ BazelBuildFile (map (ruleForModule cabalDir srcDir') sorted)
   where
-    toAbsPath relDir = normalise $ cabalDir </> relDir
     cabalDir = takeDirectory cabalFile
-    makeTarget moduleName = GHC.Target { GHC.targetId = moduleName , GHC.targetAllowObjCode = False , GHC.targetContents = Nothing }
 
 loadCompilerInfo :: IO CompilerInfo
 loadCompilerInfo = do
-  (compiler, _platform, _progDB) <- GHC.configure Verbosity.silent (Just GHC.Paths.ghc) (Just GHC.Paths.ghc_pkg) emptyProgramDb
+  (compiler, _platform, _progDB) <- CabalGHC.configure Verbosity.silent (Just GHC.Paths.ghc) (Just GHC.Paths.ghc_pkg) emptyProgramDb
   pure (compilerInfo compiler)
 
 
