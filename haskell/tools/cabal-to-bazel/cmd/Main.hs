@@ -26,10 +26,13 @@ import Distribution.Types.ComponentRequestedSpec (ComponentRequestedSpec(..))
 import Distribution.Types.Dependency (Dependency)
 import Distribution.Types.PackageName (PackageName)
 
+import GhcMonad (liftIO)
 import qualified Digraph
+import FastString (FastString)
+import Finder (FindResult(..), findImportedModule)
 import qualified GHC
 import qualified GHC.Paths
-import HscTypes (msHsFilePath)
+import HscTypes (msHsFilePath, ms_imps)
 
 -- Questions
 --
@@ -79,6 +82,14 @@ data BazelRule
   | HsBinary TargetName HaskellAttributes FilePath
   | HsTest TargetName HaskellAttributes FilePath
   deriving (Show)
+
+-- ruleName :: BazelRule -> TargetName
+-- ruleName (HsLibrary name _) = name
+-- ruleName (HsBinary name _ _) = name
+-- ruleName (HsTest name _ _) = name
+
+-- ruleLabel :: BazelRule -> Label
+-- ruleLabel rule = ':' : ruleName rule
 
 printBazelRule :: BazelRule -> String
 printBazelRule (HsLibrary name attrs) =
@@ -134,18 +145,26 @@ loadDepGraph lib = do
     makeTarget moduleName = GHC.Target { GHC.targetId = moduleName , GHC.targetAllowObjCode = False , GHC.targetContents = Nothing }
 
 
-ruleForModule :: FilePath -> FilePath -> Digraph.SCC GHC.ModSummary -> BazelRule
+ruleForModule :: GHC.GhcMonad m => FilePath -> FilePath -> Digraph.SCC GHC.ModSummary -> m BazelRule
 ruleForModule _ _ (Digraph.CyclicSCC _nodes) = error "cyclic nodes"
-ruleForModule cabalDir srcDir' (Digraph.AcyclicSCC node) =
-  HsLibrary (GHC.moduleNameString . GHC.ms_mod_name $ node) attrs
-  where
-    attrs = HaskellAttributes
-            { srcs = [makeRelative cabalDir (msHsFilePath node)]
-            , deps = []
-            , dataDeps = []
-            , srcDir = makeRelative cabalDir srcDir'
-            , packages = []
-            }
+ruleForModule cabalDir srcDir' (Digraph.AcyclicSCC node) = do
+  hsc_env <- GHC.getSession
+  deps' <- liftIO $ mapM (findDependency hsc_env) (ms_imps node)
+  pure $ HsLibrary (GHC.moduleNameString . GHC.ms_mod_name $ node)
+    HaskellAttributes
+    { srcs = [makeRelative cabalDir (msHsFilePath node)]
+    , deps = deps'
+    , dataDeps = []
+    , srcDir = makeRelative cabalDir srcDir'
+    , packages = []
+    }
+
+findDependency :: GHC.HscEnv -> (Maybe FastString, GHC.Located GHC.ModuleName) -> IO FilePath
+findDependency hsc_env (pkg, GHC.L _ imp) = do
+  result <- findImportedModule hsc_env imp pkg
+  case result of
+    Found loc _ -> pure (GHC.ml_hi_file loc)  -- XXX: Distinguish in-package vs ex-package
+    _ -> error "Could not find module"
 
 -- TODO: Visibility
 
@@ -163,7 +182,7 @@ packageDescriptionToBazel cabalFile pkgDesc =
                                          })
       depGraph <- loadDepGraph lib
       let sorted = GHC.topSortModuleGraph False depGraph Nothing
-      pure $ BazelBuildFile (map (ruleForModule cabalDir srcDir') sorted)
+      BazelBuildFile <$> mapM (ruleForModule cabalDir srcDir') sorted
   where
     cabalDir = takeDirectory cabalFile
 
